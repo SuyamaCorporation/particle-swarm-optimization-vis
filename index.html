@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>粒子群最適化 PSO ビジュアル</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+body { background: #0a0a1a; }
+canvas { display: block; image-rendering: pixelated; }
+.slider-row { display: flex; align-items: center; gap: 8px; }
+input[type=range] { flex: 1; accent-color: #60a5fa; }
+</style>
+</head>
+<body class="min-h-screen text-white font-sans p-4">
+<div class="max-w-4xl mx-auto">
+  <h1 class="text-2xl font-bold text-center mb-1 text-cyan-400">🌀 粒子群最適化 (PSO) ビジュアル</h1>
+  <p class="text-center text-gray-400 text-sm mb-3">Particle Swarm Optimization</p>
+
+  <div class="flex flex-col lg:flex-row gap-4">
+    <!-- Canvas -->
+    <div class="flex-1">
+      <canvas id="canvas" width="560" height="560" class="rounded-xl border border-gray-700 w-full" aria-label="PSO最適化の可視化"></canvas>
+    </div>
+
+    <!-- Controls -->
+    <div class="w-full lg:w-60 space-y-3">
+      <div class="bg-gray-800 rounded-xl p-3">
+        <div class="text-sm font-bold text-cyan-400 mb-2">目的関数</div>
+        <select id="funcSelect" class="w-full bg-gray-700 text-white rounded px-2 py-1 text-sm border border-gray-600" onchange="reset()" aria-label="目的関数選択">
+          <option value="sphere">Sphere（球面）</option>
+          <option value="rastrigin" selected>Rastrigin</option>
+          <option value="rosenbrock">Rosenbrock（バナナ）</option>
+          <option value="ackley">Ackley</option>
+        </select>
+      </div>
+
+      <div class="bg-gray-800 rounded-xl p-3 space-y-2 text-sm">
+        <div class="font-bold text-cyan-400 mb-1">PSO パラメータ</div>
+        <div class="slider-row">
+          <span class="w-20 text-gray-400 text-xs">慣性 w</span>
+          <input type="range" id="inertia" min="0.1" max="1.0" step="0.05" value="0.7" oninput="updateParams()">
+          <span id="vInertia" class="w-8 text-xs text-right">0.7</span>
+        </div>
+        <div class="slider-row">
+          <span class="w-20 text-gray-400 text-xs">個人 c1</span>
+          <input type="range" id="c1" min="0.5" max="3.0" step="0.1" value="1.5" oninput="updateParams()">
+          <span id="vC1" class="w-8 text-xs text-right">1.5</span>
+        </div>
+        <div class="slider-row">
+          <span class="w-20 text-gray-400 text-xs">社会 c2</span>
+          <input type="range" id="c2" min="0.5" max="3.0" step="0.1" value="1.5" oninput="updateParams()">
+          <span id="vC2" class="w-8 text-xs text-right">1.5</span>
+        </div>
+        <div class="slider-row">
+          <span class="w-20 text-gray-400 text-xs">粒子数</span>
+          <input type="range" id="nParticles" min="10" max="100" step="5" value="50" oninput="updateParams()">
+          <span id="vN" class="w-8 text-xs text-right">50</span>
+        </div>
+      </div>
+
+      <div class="bg-gray-800 rounded-xl p-3 space-y-2">
+        <button onclick="reset()" class="w-full bg-cyan-700 hover:bg-cyan-600 text-white font-bold py-2 rounded-lg text-sm" aria-label="リセット">🔄 リセット</button>
+        <button onclick="toggleRun()" id="btnRun" class="w-full bg-green-700 hover:bg-green-600 text-white font-bold py-2 rounded-lg text-sm" aria-label="実行・停止">▶ 実行</button>
+        <button onclick="stepOnce()" class="w-full bg-gray-600 hover:bg-gray-500 text-white font-bold py-2 rounded-lg text-sm" aria-label="1ステップ">1ステップ</button>
+      </div>
+
+      <div class="bg-gray-800 rounded-xl p-3 text-sm space-y-1">
+        <div class="font-bold text-cyan-400 mb-1">状態</div>
+        <div class="flex justify-between"><span class="text-gray-400">世代:</span><span id="genCount" class="font-bold">0</span></div>
+        <div class="flex justify-between"><span class="text-gray-400">最良値:</span><span id="bestVal" class="font-bold text-green-400">—</span></div>
+        <div class="flex justify-between"><span class="text-gray-400">最良位置:</span><span id="bestPos" class="font-bold text-xs">—</span></div>
+        <div class="flex justify-between"><span class="text-gray-400">収束判定:</span><span id="converged" class="font-bold text-yellow-400">探索中</span></div>
+      </div>
+
+      <div class="bg-gray-800 rounded-xl p-2 text-xs text-gray-400">
+        <div class="font-bold text-gray-300 mb-1">凡例</div>
+        <div class="flex items-center gap-1 mb-1"><span class="w-3 h-3 rounded-full bg-cyan-400 inline-block"></span> 粒子</div>
+        <div class="flex items-center gap-1 mb-1"><span class="w-3 h-3 rounded-full bg-yellow-400 inline-block"></span> 個人ベスト</div>
+        <div class="flex items-center gap-1"><span class="w-4 h-4 rounded-full bg-red-500 inline-block"></span> 群全体ベスト</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const W = canvas.width, H = canvas.height;
+
+// Functions
+const FUNCTIONS = {
+  sphere: {
+    fn: (x,y) => x*x + y*y,
+    range: 5.12, optimum: [0,0], name:'Sphere'
+  },
+  rastrigin: {
+    fn: (x,y) => 20 + x*x - 10*Math.cos(2*Math.PI*x) + y*y - 10*Math.cos(2*Math.PI*y),
+    range: 5.12, optimum: [0,0], name:'Rastrigin'
+  },
+  rosenbrock: {
+    fn: (x,y) => 100*(y-x*x)*(y-x*x) + (1-x)*(1-x),
+    range: 2, optimum: [1,1], name:'Rosenbrock'
+  },
+  ackley: {
+    fn: (x,y) => -20*Math.exp(-0.2*Math.sqrt(0.5*(x*x+y*y))) - Math.exp(0.5*(Math.cos(2*Math.PI*x)+Math.cos(2*Math.PI*y))) + Math.E + 20,
+    range: 4, optimum: [0,0], name:'Ackley'
+  }
+};
+
+let params = { w:0.7, c1:1.5, c2:1.5, n:50 };
+let running = false;
+let animId = null;
+let gen = 0;
+let particles = [];
+let gBest = null, gBestVal = Infinity;
+let contourCache = null;
+let currentFunc = 'rastrigin';
+
+function updateParams(){
+  params.w = parseFloat(document.getElementById('inertia').value);
+  params.c1 = parseFloat(document.getElementById('c1').value);
+  params.c2 = parseFloat(document.getElementById('c2').value);
+  params.n = parseInt(document.getElementById('nParticles').value);
+  document.getElementById('vInertia').textContent = params.w.toFixed(2);
+  document.getElementById('vC1').textContent = params.c1.toFixed(1);
+  document.getElementById('vC2').textContent = params.c2.toFixed(1);
+  document.getElementById('vN').textContent = params.n;
+}
+
+function getFunc(){ return FUNCTIONS[document.getElementById('funcSelect').value]; }
+
+function toCanvas(x, y, range){
+  const cx = (x / range + 1) * W/2;
+  const cy = H - (y / range + 1) * H/2;
+  return [cx, cy];
+}
+
+function buildContour(){
+  const f = getFunc();
+  const img = ctx.createImageData(W, H);
+  const vals = [];
+  for(let py=0;py<H;py++){
+    for(let px=0;px<W;px++){
+      const x = (px/W*2 - 1)*f.range;
+      const y = (1 - py/H*2)*f.range;
+      vals.push(f.fn(x,y));
+    }
+  }
+  const mn = Math.min(...vals), mx = Math.max(...vals);
+  for(let i=0;i<vals.length;i++){
+    const t = (vals[i]-mn)/(mx-mn);
+    const r = Math.round(t*50 + 10);
+    const g2 = Math.round((1-t)*80 + 20);
+    const b = Math.round(t*80 + 80);
+    img.data[i*4]=r; img.data[i*4+1]=g2; img.data[i*4+2]=b; img.data[i*4+3]=255;
+  }
+  contourCache = img;
+}
+
+function initParticles(){
+  const f = getFunc();
+  particles = [];
+  gBest = null; gBestVal = Infinity;
+  for(let i=0;i<params.n;i++){
+    const x=(Math.random()*2-1)*f.range, y=(Math.random()*2-1)*f.range;
+    const vx=(Math.random()*2-1)*f.range*0.1, vy=(Math.random()*2-1)*f.range*0.1;
+    const val=f.fn(x,y);
+    particles.push({x,y,vx,vy,px:x,py:y,pv:val});
+    if(val<gBestVal){gBestVal=val;gBest={x,y};}
+  }
+}
+
+function step(){
+  const f = getFunc();
+  for(const p of particles){
+    const r1=Math.random(), r2=Math.random();
+    p.vx = params.w*p.vx + params.c1*r1*(p.px-p.x) + params.c2*r2*(gBest.x-p.x);
+    p.vy = params.w*p.vy + params.c1*r1*(p.py-p.y) + params.c2*r2*(gBest.y-p.y);
+    const vmax = f.range*0.2;
+    p.vx = Math.max(-vmax,Math.min(vmax,p.vx));
+    p.vy = Math.max(-vmax,Math.min(vmax,p.vy));
+    p.x += p.vx; p.y += p.vy;
+    p.x = Math.max(-f.range, Math.min(f.range, p.x));
+    p.y = Math.max(-f.range, Math.min(f.range, p.y));
+    const v = f.fn(p.x,p.y);
+    if(v<p.pv){p.pv=v;p.px=p.x;p.py=p.y;}
+    if(v<gBestVal){gBestVal=v;gBest={x:p.x,y:p.y};}
+  }
+  gen++;
+}
+
+function render(){
+  if(!contourCache) buildContour();
+  ctx.putImageData(contourCache, 0, 0);
+  const f = getFunc();
+
+  // Draw contour lines (iso-lines)
+  ctx.strokeStyle='rgba(255,255,255,0.08)';
+  ctx.lineWidth=0.5;
+
+  // Particle velocity lines
+  for(const p of particles){
+    const [cx,cy]=toCanvas(p.x,p.y,f.range);
+    const [tx,ty]=toCanvas(p.x+p.vx*3,p.y+p.vy*3,f.range);
+    ctx.beginPath();
+    ctx.strokeStyle='rgba(96,165,250,0.3)';
+    ctx.lineWidth=0.8;
+    ctx.moveTo(cx,cy);
+    ctx.lineTo(tx,ty);
+    ctx.stroke();
+  }
+
+  // Personal bests
+  for(const p of particles){
+    const [cx,cy]=toCanvas(p.px,p.py,f.range);
+    ctx.beginPath();
+    ctx.arc(cx,cy,2.5,0,Math.PI*2);
+    ctx.fillStyle='rgba(250,204,21,0.5)';
+    ctx.fill();
+  }
+
+  // Particles
+  for(const p of particles){
+    const [cx,cy]=toCanvas(p.x,p.y,f.range);
+    ctx.beginPath();
+    ctx.arc(cx,cy,4,0,Math.PI*2);
+    ctx.fillStyle='rgba(96,165,250,0.85)';
+    ctx.fill();
+    ctx.strokeStyle='rgba(147,210,255,0.5)';
+    ctx.lineWidth=1;
+    ctx.stroke();
+  }
+
+  // Global best
+  if(gBest){
+    const [cx,cy]=toCanvas(gBest.x,gBest.y,f.range);
+    ctx.beginPath();
+    ctx.arc(cx,cy,10,0,Math.PI*2);
+    ctx.fillStyle='rgba(239,68,68,0.8)';
+    ctx.fill();
+    ctx.strokeStyle='#fbbf24';
+    ctx.lineWidth=2;
+    ctx.stroke();
+    // Star marker
+    ctx.fillStyle='#fff';
+    ctx.font='bold 12px sans-serif';
+    ctx.textAlign='center';
+    ctx.fillText('★',cx,cy+4);
+  }
+
+  // True optimum
+  const [ox,oy]=toCanvas(f.optimum[0],f.optimum[1],f.range);
+  ctx.beginPath();
+  ctx.arc(ox,oy,6,0,Math.PI*2);
+  ctx.strokeStyle='#4ade80';
+  ctx.lineWidth=2;
+  ctx.stroke();
+  ctx.fillStyle='rgba(74,222,128,0.3)';
+  ctx.fill();
+
+  // Info overlay
+  ctx.fillStyle='rgba(0,0,0,0.5)';
+  ctx.fillRect(5,5,160,50);
+  ctx.fillStyle='#fff';
+  ctx.font='11px monospace';
+  ctx.textAlign='left';
+  ctx.fillText(`Gen: ${gen}`,10,18);
+  ctx.fillText(`Best: ${gBestVal.toFixed(4)}`,10,30);
+  ctx.fillText(`f: ${f.name}`,10,42);
+
+  // Update UI
+  document.getElementById('genCount').textContent=gen;
+  document.getElementById('bestVal').textContent=gBestVal.toFixed(6);
+  if(gBest) document.getElementById('bestPos').textContent=`(${gBest.x.toFixed(2)},${gBest.y.toFixed(2)})`;
+  const converged = gBestVal < 0.01;
+  document.getElementById('converged').textContent=converged?'✅ 収束済み':'探索中...';
+  document.getElementById('converged').className='font-bold '+(converged?'text-green-400':'text-yellow-400');
+}
+
+function loop(){
+  step();
+  render();
+  if(running) animId=requestAnimationFrame(loop);
+}
+
+function toggleRun(){
+  running=!running;
+  document.getElementById('btnRun').textContent=running?'⏸ 停止':'▶ 実行';
+  document.getElementById('btnRun').className='w-full '+(running?'bg-orange-700 hover:bg-orange-600':'bg-green-700 hover:bg-green-600')+' text-white font-bold py-2 rounded-lg text-sm';
+  if(running) loop();
+  else if(animId) cancelAnimationFrame(animId);
+}
+
+function stepOnce(){ step(); render(); }
+
+function reset(){
+  running=false;
+  if(animId) cancelAnimationFrame(animId);
+  document.getElementById('btnRun').textContent='▶ 実行';
+  document.getElementById('btnRun').className='w-full bg-green-700 hover:bg-green-600 text-white font-bold py-2 rounded-lg text-sm';
+  gen=0; contourCache=null;
+  updateParams();
+  initParticles();
+  render();
+}
+
+updateParams();
+reset();
+</script>
+</body>
+</html>
